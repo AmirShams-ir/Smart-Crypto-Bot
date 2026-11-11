@@ -3,5 +3,5 @@ Scripts for performs mandatory base initialization for autotrading server on a f
 
 install scripts:
 ```bash
-bash -c "$(curl -Lfo- https://raw.githubusercontent.com/AmirShams-ir/Market-Trader-Bot/refs/heads/main/bootstrap-lite.sh)"
+bash -c "$(curl -Lfo- https://raw.githubusercontent.com/AmirShams-ir/Market-Trader-Bot/refs/heads/main/common-modules/bootstrap.sh)"
 ```
