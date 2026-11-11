@@ -1,108 +1,131 @@
 #!/usr/bin/env bash
+# Smart Crypto Bot - ordered installer and stage-by-stage report.
+# Usage: bash install.sh [--with-hyperopt] [--skip-bootstrap] [--skip-upgrade] [--no-firewall]
 set -Eeuo pipefail
+IFS=$'\n\t'
 
-APP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="$APP_DIR/.venv"
-ENV_FILE="$APP_DIR/.env"
-GITIGNORE_FILE="$APP_DIR/.gitignore"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DIR="${INSTALL_LOG_DIR:-$SCRIPT_DIR/logs/install}"
+WITH_HYPEROPT="${INSTALL_HYPEROPT:-0}"
+SKIP_BOOTSTRAP=false
+SKIP_UPGRADE=false
+NO_FIREWALL=false
+STARTED_AT="$(date +%s)"
+RUN_ID="$(date +%Y%m%d-%H%M%S)"
+CURRENT_STAGE="Initialization"
+CURRENT_LOG=""
+REPORT_FILE=""
 
-if [[ "$(id -u)" -eq 0 ]]; then
-  echo "Please run this script as your normal user (e.g. amir), not with sudo."
-  echo "The script will use sudo only for installing Debian packages."
-  exit 1
-fi
+info(){ printf '\033[34m[INFO]\033[0m %s\n' "$*"; }
+ok(){ printf '\033[32m[ OK ]\033[0m %s\n' "$*"; }
+die(){ printf '\033[31m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
 
-if ! command -v sudo >/dev/null 2>&1; then
-  echo "ERROR: sudo is required to install Debian system packages."
-  exit 1
-fi
+while (($#)); do
+  case "$1" in
+    --with-hyperopt) WITH_HYPEROPT=1; shift ;;
+    --skip-bootstrap) SKIP_BOOTSTRAP=true; shift ;;
+    --skip-upgrade) SKIP_UPGRADE=true; shift ;;
+    --no-firewall) NO_FIREWALL=true; shift ;;
+    -h|--help)
+      cat <<'HELP'
+Usage: bash install.sh [options]
+  --with-hyperopt   Install optional Hyperopt dependencies after Freqtrade
+  --skip-bootstrap  Skip OS provisioning on an already prepared host
+  --skip-upgrade    Pass --skip-upgrade to bootstrap.sh
+  --no-firewall     Pass --no-firewall to bootstrap.sh
+Environment:
+  FREQTRADE_DIR     Freqtrade checkout path (default: common-modules/freqtrade)
+  PYTHON_VERSION    Python minor version (e.g. 3.12)
+  INSTALL_HYPEROPT  Set to 1 to install Hyperopt by default
+  INSTALL_LOG_DIR   Override report/log directory
+HELP
+      exit 0 ;;
+    *) die "Unknown option: $1" ;;
+  esac
+done
 
-echo "[1/5] Installing Debian prerequisites..."
-sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip ca-certificates
+# Keep the orchestrator unprivileged; elevate only the OS bootstrap.
+(( EUID != 0 )) || die "Run install.sh as a normal project user, not root. sudo is used only for bootstrap."
+command -v sudo >/dev/null 2>&1 || die "sudo is required, or use --skip-bootstrap on a prepared host."
 
-echo "[2/5] Creating virtual environment..."
-if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-  python3 -m venv "$VENV_DIR"
-fi
+mkdir -p "$LOG_DIR"
+REPORT_FILE="$LOG_DIR/report-$RUN_ID.txt"
+touch "$REPORT_FILE"
+exec > >(tee -a "$LOG_DIR/install-$RUN_ID.log") 2>&1
 
-echo "[3/5] Installing/updating Python dependencies..."
-"$VENV_DIR/bin/python" -m pip install --upgrade pip
-"$VENV_DIR/bin/python" -m pip install -r "$APP_DIR/requirements.txt"
+printf 'Smart Crypto Bot installation report\nRun ID: %s\nStarted: %s\n\n' "$RUN_ID" "$(date -Is)" > "$REPORT_FILE"
+printf '%-24s | %-10s | %8s | %s\n' "STAGE" "STATUS" "SECONDS" "LOG" | tee -a "$REPORT_FILE"
+printf '%s\n' '-------------------------+------------+----------+----------------------------------------' | tee -a "$REPORT_FILE"
 
-echo "[4/5] Checking imports..."
-"$VENV_DIR/bin/python" - <<'PY'
-import pandas
-import sqlalchemy
-import dotenv
-import twelvedata
+report_stage(){
+  printf '%-24s | %-10s | %8ss | %s\n' "$1" "$2" "$3" "$4" | tee -a "$REPORT_FILE"
+}
 
-print("Python dependencies: OK")
-print("pandas:", pandas.__version__)
-print("SQLAlchemy:", sqlalchemy.__version__)
-PY
-
-echo "[5/5] Configuring Twelve Data API key..."
-
-# Ensure the environment file is never tracked by Git.
-if [[ ! -f "$GITIGNORE_FILE" ]]; then
-  touch "$GITIGNORE_FILE"
-fi
-if ! grep -qxF '.env' "$GITIGNORE_FILE"; then
-  printf '\n# Local secrets\n.env\n' >> "$GITIGNORE_FILE"
-fi
-
-# Read an existing key, if present, without displaying it.
-EXISTING_KEY=""
-if [[ -f "$ENV_FILE" ]]; then
-  EXISTING_KEY="$(sed -n 's/^TWELVE_API_KEY=//p' "$ENV_FILE" | tail -n 1)"
-fi
-
-if [[ -n "$EXISTING_KEY" ]]; then
-  read -r -p "A Twelve Data API key is already configured. Replace it? [y/N]: " REPLACE_KEY
-  if [[ "${REPLACE_KEY,,}" == "y" || "${REPLACE_KEY,,}" == "yes" ]]; then
-    read -r -s -p "Enter your Twelve Data API key: " API_KEY
-    printf '\n'
+run_stage(){
+  local name="$1"; shift
+  local log_file="$LOG_DIR/${RUN_ID}-${name//[^a-zA-Z0-9_-]/_}.log"
+  local start end elapsed rc=0
+  CURRENT_STAGE="$name"
+  CURRENT_LOG="$log_file"
+  start="$(date +%s)"
+  info "============================================================"
+  info "START: $name"
+  info "Log: $log_file"
+  set +e
+  "$@" 2>&1 | tee "$log_file"
+  rc=${PIPESTATUS[0]}
+  set -e
+  end="$(date +%s)"
+  elapsed="$((end-start))"
+  if (( rc == 0 )); then
+    ok "$name completed in ${elapsed}s"
+    report_stage "$name" "PASS" "$elapsed" "$log_file"
   else
-    API_KEY="$EXISTING_KEY"
-    echo "Keeping the existing API key."
+    report_stage "$name" "FAIL($rc)" "$elapsed" "$log_file"
+    printf '\nINSTALLATION RESULT: FAILED\nRun ID: %s\nFailed stage: %s\nExit code: %s\nStage log: %s\nReport: %s\n' "$RUN_ID" "$name" "$rc" "$log_file" "$REPORT_FILE" | tee -a "$REPORT_FILE"
+    die "Installation stopped at stage: $name (exit $rc)."
   fi
+}
+
+info "Smart Crypto Bot installer starting."
+info "Order: system bootstrap -> Python -> Freqtrade -> optional Hyperopt."
+
+if [[ "$SKIP_BOOTSTRAP" == false ]]; then
+  BOOT_ARGS=()
+  [[ "$SKIP_UPGRADE" == false ]] || BOOT_ARGS+=(--skip-upgrade)
+  [[ "$NO_FIREWALL" == false ]] || BOOT_ARGS+=(--no-firewall)
+  run_stage "System bootstrap" sudo bash "$SCRIPT_DIR/bootstrap.sh" "${BOOT_ARGS[@]}"
 else
-  while [[ -z "${API_KEY:-}" ]]; do
-    read -r -s -p "Enter your Twelve Data API key: " API_KEY
-    printf '\n'
-    if [[ -z "$API_KEY" ]]; then
-      echo "The API key cannot be empty. Please try again."
-    fi
-  done
+  info "System bootstrap skipped by request."
 fi
 
-if [[ -z "${API_KEY:-}" ]]; then
-  echo "ERROR: No API key was provided. .env was not updated." >&2
-  exit 1
+PY_ARGS=()
+[[ -z "${PYTHON_VERSION:-}" ]] || PY_ARGS+=(--python "$PYTHON_VERSION")
+run_stage "Python environment" bash "$SCRIPT_DIR/python.sh" "${PY_ARGS[@]}"
+
+FT_ARGS=()
+[[ "$WITH_HYPEROPT" != 1 ]] || FT_ARGS+=(--with-hyperopt)
+run_stage "Freqtrade installation" bash "$SCRIPT_DIR/freqtrade.sh" "${FT_ARGS[@]}"
+
+if [[ "$WITH_HYPEROPT" == 1 ]]; then
+  run_stage "Hyperopt verification" bash "$SCRIPT_DIR/hyperopt.sh"
+else
+  info "Hyperopt skipped (optional). Use --with-hyperopt to install it."
 fi
 
-# Write atomically with restrictive permissions. Avoid shell tracing of secrets.
-umask 077
-TMP_ENV="$(mktemp "$APP_DIR/.env.tmp.XXXXXX")"
-trap 'rm -f "${TMP_ENV:-}"' EXIT
-if [[ -f "$ENV_FILE" ]]; then
-  # Preserve unrelated variables while replacing TWELVE_API_KEY.
-  awk '!/^TWELVE_API_KEY=/' "$ENV_FILE" > "$TMP_ENV"
-fi
-printf 'TWELVE_API_KEY=%s\n' "$API_KEY" >> "$TMP_ENV"
-chmod 600 "$TMP_ENV"
-mv -f "$TMP_ENV" "$ENV_FILE"
-chmod 600 "$ENV_FILE"
-unset API_KEY EXISTING_KEY
+END_AT="$(date +%s)"
+TOTAL="$((END_AT-STARTED_AT))"
+{
+  printf '\nINSTALLATION RESULT: SUCCESS\n'
+  printf 'Run ID          : %s\n' "$RUN_ID"
+  printf 'Finished        : %s\n' "$(date -Is)"
+  printf 'Total duration  : %ss\n' "$TOTAL"
+  printf 'Hyperopt        : %s\n' "$([[ "$WITH_HYPEROPT" == 1 ]] && echo installed || echo skipped)"
+  printf 'Freqtrade path  : %s\n' "${FREQTRADE_DIR:-$SCRIPT_DIR/freqtrade}"
+  printf 'Virtualenv      : %s\n' "${VENV_DIR:-${FREQTRADE_DIR:-$SCRIPT_DIR/freqtrade}/.venv}"
+  printf 'Stage report    : %s\n' "$REPORT_FILE"
+} | tee -a "$REPORT_FILE"
 
-mkdir -p "$APP_DIR/data" "$APP_DIR/logs"
-touch "$APP_DIR/data/.gitkeep" "$APP_DIR/logs/.gitkeep"
-
-echo
-echo "Installation and configuration completed."
-echo "API key saved to .env with permissions 600."
-echo "Verify configuration (does not print the key):"
-echo "  .venv/bin/python -c 'from config import API_KEY; print(\"API key loaded:\", bool(API_KEY))'"
-echo "Run the CLI with: .venv/bin/python run.py"
-echo "Do not run the application with sudo."
+ok "All requested installation stages completed."
+info "Full log: $LOG_DIR/install-$RUN_ID.log"
+info "Report  : $REPORT_FILE"
