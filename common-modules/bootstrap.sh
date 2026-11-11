@@ -5,7 +5,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "\${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_NAME="bootstrap"
 LOG_FILE="/var/log/smart-crypto-bot-bootstrap.log"
 APT_MAIN="/etc/apt/sources.list"
@@ -41,7 +41,7 @@ has(){ command -v "$1" >/dev/null 2>&1; }
 has_systemd(){ [[ -d /run/systemd/system ]] && has systemctl; }
 backup_file(){
   local path="$1"
-  [[ -e "$path" ]] && cp -a -- "$path" "\${path}.bak.\${TIMESTAMP}"
+  [[ -e "$path" ]] && cp -a -- "$path" "${path}.bak.${TIMESTAMP}"
 }
 apt_install(){ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"; }
 
@@ -52,12 +52,12 @@ fi
 [[ -r /etc/os-release ]] || die "/etc/os-release is missing."
 # shellcheck disable=SC1091
 . /etc/os-release
-OS_ID="\${ID:-}"
-OS_VERSION="\${VERSION_ID:-}"
-OS_CODENAME="\${VERSION_CODENAME:-}"
-PRETTY="\${PRETTY_NAME:-unknown}"
+OS_ID="${ID:-}"
+OS_VERSION="${VERSION_ID:-}"
+OS_CODENAME="${VERSION_CODENAME:-}"
+PRETTY="${PRETTY_NAME:-unknown}"
 IS_ARMBIAN=false
-[[ "$OS_ID" == armbian || -f /etc/armbian-release || -n "\${ARMBIAN_PRETTY_NAME:-}" ]] && IS_ARMBIAN=true
+[[ "$OS_ID" == armbian || -f /etc/armbian-release || -n "${ARMBIAN_PRETTY_NAME:-}" ]] && IS_ARMBIAN=true
 
 case "$OS_ID" in
   debian|armbian)
@@ -103,8 +103,8 @@ RAM_MB="$((RAM_KB / 1024))"
 ROOT_TOTAL_MB="$(df -Pm / | awk 'NR==2 {print $2}')"
 ROOT_FREE_MB="$(df -Pm / | awk 'NR==2 {print $4}')"
 info "Architecture: $ARCH ($KERNEL_ARCH)"
-info "CPU: \${CPU_MODEL:-unknown} | Threads: $CPU_THREADS"
-info "RAM: \${RAM_MB} MB | Root disk: \${ROOT_TOTAL_MB} MB total, \${ROOT_FREE_MB} MB free"
+info "CPU: ${CPU_MODEL:-unknown} | Threads: $CPU_THREADS"
+info "RAM: ${RAM_MB} MB | Root disk: ${ROOT_TOTAL_MB} MB total, ${ROOT_FREE_MB} MB free"
 
 # Preserve current apt configuration before changing it.
 mkdir -p /etc/apt/sources.list.d /etc/apt/preferences.d /etc/apt/apt.conf.d
@@ -240,11 +240,11 @@ PACKAGES=(
   fail2ban ufw
   util-linux procps iproute2 iputils-ping
 )
-apt_install "\${PACKAGES[@]}" || die "Required package installation failed."
+apt_install "${PACKAGES[@]}" || die "Required package installation failed."
 ok "Base tools and security packages installed."
 
 # Keep optional Python development support available for application deployments.
-if [[ "\${INSTALL_PYTHON_BUILD_DEPS:-0}" == 1 ]]; then
+if [[ "${INSTALL_PYTHON_BUILD_DEPS:-0}" == 1 ]]; then
   apt_install python3 python3-pip python3-venv python3-dev libffi-dev libssl-dev
 fi
 
@@ -284,10 +284,10 @@ if ! swapon --show --noheadings 2>/dev/null | grep -q .; then
     fi
     DISK_FREE_MB="$(df -Pm / | awk 'NR==2 {print $4}')"
     if (( DISK_FREE_MB > SWAP_MB + 1024 )); then
-      (fallocate -l "\${SWAP_MB}M" /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count="$SWAP_MB" status=none) \
+      (fallocate -l "${SWAP_MB}M" /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count="$SWAP_MB" status=none) \
         && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile \
         && { grep -qE '^[[:space:]]*/swapfile[[:space:]]' /etc/fstab || echo '/swapfile none swap sw,pri=10 0 0' >>/etc/fstab; } \
-        && ok "Disk swap enabled (\${SWAP_MB} MB)." || warn "Disk swap creation failed."
+        && ok "Disk swap enabled (${SWAP_MB} MB)." || warn "Disk swap creation failed."
     else
       warn "Insufficient free disk space for additional swap; skipped."
     fi
@@ -365,10 +365,10 @@ if $ENABLE_FIREWALL; then
       [[ "$port" =~ ^[0-9]+$ ]] && SSH_PORTS+=("$port")
     done < <(sshd -T 2>/dev/null | awk '$1=="port" {print $2}' | sort -nu || true)
   fi
-  (("\${#SSH_PORTS[@]}" > 0)) || SSH_PORTS=(22)
+  (("${#SSH_PORTS[@]}" > 0)) || SSH_PORTS=(22)
   ufw default deny incoming
   ufw default allow outgoing
-  for port in "\${SSH_PORTS[@]}"; do ufw allow "$port/tcp" comment 'SSH access'; done
+  for port in "${SSH_PORTS[@]}"; do ufw allow "$port/tcp" comment 'SSH access'; done
   ufw --force enable || warn "UFW activation failed."
   if has_systemd; then systemctl enable ufw.service 2>/dev/null || true; fi
 else
