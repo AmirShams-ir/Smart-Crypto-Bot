@@ -1,0 +1,20 @@
+# This file is a template. scripts/install-timers.sh replaces @APP_USER@
+# and @APP_DIR@ with the detected values before installing it.
+
+[Unit]
+Description=Market Adviser Bot data fetch (%i)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=@APP_USER@
+WorkingDirectory=@APP_DIR@
+EnvironmentFile=@APP_DIR@/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@APP_DIR@/.venv/bin/python @APP_DIR@/core/fetcher.py --symbol %I --timeframe %J
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=@APP_DIR@/data @APP_DIR@/logs
