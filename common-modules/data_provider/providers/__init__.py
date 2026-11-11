@@ -1,1 +1,1 @@
-"""Exchange and market-data provider adapters."""
+"""Market-data provider adapters."""
